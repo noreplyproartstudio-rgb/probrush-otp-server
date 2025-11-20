@@ -1,8 +1,9 @@
-import express from "express";
-import bodyParser from "body-parser";
-import fs from "fs";
-import axios from "axios";
-import dotenv from "dotenv";
+// server.js (CommonJS)
+const express = require("express");
+const bodyParser = require("body-parser");
+const fs = require("fs");
+const axios = require("axios");
+const dotenv = require("dotenv");
 
 dotenv.config();
 
@@ -16,7 +17,6 @@ const OTP_TTL = parseInt(process.env.OTP_TTL_MINUTES || "10", 10) * 60 * 1000;
 console.log("RESEND_API_KEY set?", !!process.env.RESEND_API_KEY);
 console.log("OTP_API_KEY set?", !!process.env.OTP_API_KEY);
 
-// route-level API key middleware
 function requireApiKey(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   if (apiKey !== process.env.OTP_API_KEY) {
@@ -25,7 +25,6 @@ function requireApiKey(req, res, next) {
   next();
 }
 
-// public health route
 app.get("/", (req, res) => {
   res.send("✅ ProBrush OTP API is running successfully!");
 });
@@ -52,7 +51,6 @@ function verifyOTP(uid, code) {
   return record.otp === code;
 }
 
-// send via Resend HTTP API
 async function sendMailViaResend(to, otp) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) throw new Error("RESEND_API_KEY not set");
