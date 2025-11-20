@@ -146,4 +146,3 @@ app.post("/verify-otp", requireApiKey, (req, res) => {
 
 // ====== START SERVER ======
 app.listen(PORT, () => console.log(`🚀 OTP server listening on port ${PORT}`));
-
