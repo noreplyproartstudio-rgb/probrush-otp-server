@@ -75,7 +75,7 @@ async function sendMailViaResend(to, otp) {
   if (!apiKey) throw new Error("RESEND_API_KEY not set");
 
   const payload = {
-    from: "ProBrush <onboarding@resend.dev>",     // ✅ safe sender for testing
+    from: "ProBrush <	noreply.proartstudio@gmail.com>",     // ✅ safe sender for testing
     to: [to],
     subject: "Your ProBrush Verification Code",
     html: `
