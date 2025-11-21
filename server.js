@@ -12,7 +12,11 @@ const dotenv = require('dotenv');
 dotenv.config();
 const app = express();
 app.use(bodyParser.json());
-app.use(cors({ origin: true, methods: ['GET','POST','OPTIONS'], allowedHeaders: ['Content-Type','x-api-key','Authorization'] }));
+app.use(cors({
+  origin: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'x-api-key', 'Authorization']
+}));
 
 const PORT = process.env.PORT || 10000;
 const OTP_FILE = process.env.OTP_FILE || 'otps.json';
@@ -29,15 +33,37 @@ if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
 }
 
 // Helper: OTP persistence (simple file store)
-function generateOTP() { return Math.floor(100000 + Math.random() * 900000).toString(); }
-function readOTPs() { try { if (!fs.existsSync(OTP_FILE)) return {}; return JSON.parse(fs.readFileSync(OTP_FILE,'utf8') || '{}'); } catch(e){ console.error('readOTPs', e); return {}; } }
-function saveOTP(uid, otp) { const s = readOTPs(); s[uid] = { otp, expires: Date.now() + OTP_TTL }; fs.writeFileSync(OTP_FILE, JSON.stringify(s, null, 2)); }
-function verifyOTP(uid, code) { const s = readOTPs(); const r = s[uid]; if(!r) return false; if(Date.now() > r.expires) return false; return r.otp === code; }
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+function readOTPs() {
+  try {
+    if (!fs.existsSync(OTP_FILE)) return {};
+    return JSON.parse(fs.readFileSync(OTP_FILE, 'utf8') || '{}');
+  } catch (e) {
+    console.error('readOTPs', e);
+    return {};
+  }
+}
+function saveOTP(uid, otp) {
+  const s = readOTPs();
+  s[uid] = { otp, expires: Date.now() + OTP_TTL };
+  fs.writeFileSync(OTP_FILE, JSON.stringify(s, null, 2));
+}
+function verifyOTP(uid, code) {
+  const s = readOTPs();
+  const r = s[uid];
+  if (!r) return false;
+  if (Date.now() > r.expires) return false;
+  return r.otp === code;
+}
 
 // API key middleware
 function requireApiKey(req, res, next) {
   const key = req.get('x-api-key');
-  if (!key || key !== process.env.OTP_API_KEY) return res.status(401).json({ success: false, message: 'Unauthorized' });
+  if (!key || key !== process.env.OTP_API_KEY) {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
   next();
 }
 
@@ -66,7 +92,9 @@ app.get('/', (req, res) => res.send('✅ OTP server (Gmail) running'));
 app.post('/send-otp', requireApiKey, async (req, res) => {
   console.log('▶ /send-otp called; body keys:', Object.keys(req.body || {}));
   const { uid, email } = req.body || {};
-  if (!uid || !email) return res.status(400).json({ success: false, message: 'Missing uid or email' });
+  if (!uid || !email) {
+    return res.status(400).json({ success: false, message: 'Missing uid or email' });
+  }
 
   const otp = generateOTP();
   try {
@@ -95,11 +123,37 @@ app.post('/send-otp', requireApiKey, async (req, res) => {
     // Detailed logging for Render logs (do NOT log secrets)
     console.error('❌ SMTP send failed:', err && (err.message || err.toString()));
     if (err && err.response) {
-      console.error('SMTP response:', { code: err.response.code || err.response.status, text: err.response && err.response.text });
+      console.error('SMTP response:', {
+        code: err.response.code || err.response.status,
+        text: err.response && err.response.text
+      });
     }
 
     // RESPOND with helpful non-secret error to the client to aid debugging
-    // (err.message is safe; it doesn't include the SMTP password)
     return res.status(500).json({
       success: false,
-      message: 'Failed to send
+      message: 'Failed to send OTP email',
+      error: err && (err.message || String(err)),
+    });
+  }
+});
+
+// Optional: verify-otp endpoint your app can call
+app.post('/verify-otp', requireApiKey, (req, res) => {
+  const { uid, otp } = req.body || {};
+  if (!uid || !otp) {
+    return res.status(400).json({ success: false, message: 'Missing uid or otp' });
+  }
+
+  const ok = verifyOTP(uid, otp);
+  if (!ok) {
+    return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
+  }
+
+  return res.json({ success: true, message: 'OTP verified' });
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 OTP server listening on port ${PORT}`);
+});
