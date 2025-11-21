@@ -1,164 +1,105 @@
-// server.js — Gmail SMTP ONLY OTP server
-// Requirements (Render Environment Variables):
-// SMTP_USER          = noreply.proartstudio@gmail.com
-// SMTP_PASS          = <your 16-digit Gmail App Password>
-// SMTP_HOST          = smtp.gmail.com
-// SMTP_PORT          = 587
-// OTP_API_KEY        = (same key used by your mobile app)
-// OTP_TTL_MINUTES    = 10 (optional)
+// server.js — Gmail-only OTP server with detailed SMTP error reporting
+// REQUIRED ENV (Render):
+// OTP_API_KEY, SMTP_USER, SMTP_PASS, SMTP_HOST (smtp.gmail.com), SMTP_PORT (587), OTP_TTL_MINUTES (optional)
 
-const express = require("express");
-const bodyParser = require("body-parser");
-const fs = require("fs");
-const cors = require("cors");
-const nodemailer = require("nodemailer");
-const dotenv = require("dotenv");
+const express = require('express');
+const bodyParser = require('body-parser');
+const fs = require('fs');
+const cors = require('cors');
+const nodemailer = require('nodemailer');
+const dotenv = require('dotenv');
 
 dotenv.config();
-
 const app = express();
 app.use(bodyParser.json());
-app.use(
-  cors({
-    origin: true,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "x-api-key", "Authorization"],
-  })
-);
+app.use(cors({ origin: true, methods: ['GET','POST','OPTIONS'], allowedHeaders: ['Content-Type','x-api-key','Authorization'] }));
 
 const PORT = process.env.PORT || 10000;
-const OTP_FILE = "otps.json";
-const OTP_TTL =
-  parseInt(process.env.OTP_TTL_MINUTES || "10", 10) * 60 * 1000;
+const OTP_FILE = process.env.OTP_FILE || 'otps.json';
+const OTP_TTL = parseInt(process.env.OTP_TTL_MINUTES || '10', 10) * 60 * 1000;
 
-console.log("🚀 ProBrush Gmail OTP Server started");
-
-// --- API key middleware -----------------------------------------
-function requireApiKey(req, res, next) {
-  const received = req.get("x-api-key");
-  if (!process.env.OTP_API_KEY) {
-    return res
-      .status(500)
-      .json({ success: false, message: "Server missing OTP_API_KEY" });
-  }
-  if (!received || received !== process.env.OTP_API_KEY) {
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-  }
-  next();
-}
-
-// --- OTP helpers --------------------------------------------------
-function generateOTP() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-function readOTPs() {
-  try {
-    if (!fs.existsSync(OTP_FILE)) return {};
-    return JSON.parse(fs.readFileSync(OTP_FILE, "utf-8") || "{}");
-  } catch (err) {
-    console.error("readOTPs error:", err.message);
-    return {};
-  }
-}
-
-function saveOTP(uid, otp) {
-  const otps = readOTPs();
-  otps[uid] = { otp, expires: Date.now() + OTP_TTL };
-  fs.writeFileSync(OTP_FILE, JSON.stringify(otps, null, 2));
-}
-
-function verifyOTP(uid, code) {
-  const otps = readOTPs();
-  const rec = otps[uid];
-  if (!rec) return false;
-  if (Date.now() > rec.expires) return false;
-  return rec.otp === code;
-}
-
-// --- Gmail SMTP Transporter --------------------------------------
-if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-  console.error("❌ Missing SMTP_USER or SMTP_PASS");
+if (!process.env.OTP_API_KEY) {
+  console.error('❌ OTP_API_KEY missing — set it in Render environment variables');
   process.exit(1);
 }
 
+if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+  console.error('❌ SMTP_USER or SMTP_PASS missing — set Gmail App Password and user');
+  process.exit(1);
+}
+
+// Helper: OTP persistence (simple file store)
+function generateOTP() { return Math.floor(100000 + Math.random() * 900000).toString(); }
+function readOTPs() { try { if (!fs.existsSync(OTP_FILE)) return {}; return JSON.parse(fs.readFileSync(OTP_FILE,'utf8') || '{}'); } catch(e){ console.error('readOTPs', e); return {}; } }
+function saveOTP(uid, otp) { const s = readOTPs(); s[uid] = { otp, expires: Date.now() + OTP_TTL }; fs.writeFileSync(OTP_FILE, JSON.stringify(s, null, 2)); }
+function verifyOTP(uid, code) { const s = readOTPs(); const r = s[uid]; if(!r) return false; if(Date.now() > r.expires) return false; return r.otp === code; }
+
+// API key middleware
+function requireApiKey(req, res, next) {
+  const key = req.get('x-api-key');
+  if (!key || key !== process.env.OTP_API_KEY) return res.status(401).json({ success: false, message: 'Unauthorized' });
+  next();
+}
+
+// Create transporter
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || "smtp.gmail.com",
-  port: parseInt(process.env.SMTP_PORT || "587", 10),
+  host: process.env.SMTP_HOST || 'smtp.gmail.com',
+  port: parseInt(process.env.SMTP_PORT || '587', 10),
   secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
+  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  // increase greeting timeout for flaky networks
+  greetingTimeout: 15000
 });
 
-// Test SMTP
-transporter
-  .verify()
-  .then(() => console.log("📧 Gmail SMTP verified"))
-  .catch((err) => {
-    console.error("❌ Gmail SMTP failed:", err.message);
-  });
+// Verify transport on startup and log result
+transporter.verify().then(() => {
+  console.log('✅ SMTP verified (Gmail). Ready to send emails.');
+}).catch((err) => {
+  // Crash early — logs will show reason (wrong app password, network, port blocked)
+  console.error('❌ SMTP verification failed on startup:', err && (err.message || err.toString()));
+  // do not exit — keep server running but log failure; requests will return informative error
+});
 
-// --- Routes -------------------------------------------------------
+// Routes
+app.get('/', (req, res) => res.send('✅ OTP server (Gmail) running'));
 
-app.get("/", (req, res) =>
-  res.send("✅ ProBrush Gmail OTP Server is running")
-);
-
-app.post("/send-otp", requireApiKey, async (req, res) => {
-  const { uid, email } = req.body;
-  if (!uid || !email)
-    return res
-      .status(400)
-      .json({ success: false, message: "uid and email required" });
+app.post('/send-otp', requireApiKey, async (req, res) => {
+  console.log('▶ /send-otp called; body keys:', Object.keys(req.body || {}));
+  const { uid, email } = req.body || {};
+  if (!uid || !email) return res.status(400).json({ success: false, message: 'Missing uid or email' });
 
   const otp = generateOTP();
-  saveOTP(uid, otp);
+  try {
+    saveOTP(uid, otp);
+  } catch (e) {
+    console.error('Failed saving OTP:', e && e.message);
+    // proceed to attempt send even if saving failed
+  }
+
+  const mailOptions = {
+    from: `"ProBrush" <${process.env.SMTP_USER}>`,
+    to: email,
+    subject: 'Your ProBrush verification code',
+    html: `<div style="font-family:Arial;padding:18px;text-align:center">
+            <h2>ProBrush — verification</h2>
+            <p style="font-size:28px;letter-spacing:6px;font-weight:bold;margin:12px 0">${otp}</p>
+            <p>Expires in ${process.env.OTP_TTL_MINUTES || 10} minutes.</p>
+           </div>`
+  };
 
   try {
-    await transporter.sendMail({
-      from: `"ProBrush" <${process.env.SMTP_USER}>`,
-      to: email,
-      subject: "Your ProBrush Verification Code",
-      html: `
-        <div style="font-family:Arial;padding:20px;text-align:center">
-          <h2>Your verification code</h2>
-          <h1 style="font-size:40px;letter-spacing:6px">${otp}</h1>
-          <p>Expires in ${process.env.OTP_TTL_MINUTES || 10} minutes.</p>
-        </div>
-      `,
-    });
-
-    return res.json({
-      success: true,
-      message: "OTP sent successfully (Gmail)",
-    });
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ SMTP send success; messageId=', info && info.messageId);
+    return res.json({ success: true, message: 'OTP sent' });
   } catch (err) {
-    console.error("SMTP send error:", err.message);
+    // Detailed logging for Render logs (do NOT log secrets)
+    console.error('❌ SMTP send failed:', err && (err.message || err.toString()));
+    if (err && err.response) {
+      console.error('SMTP response:', { code: err.response.code || err.response.status, text: err.response && err.response.text });
+    }
+
+    // RESPOND with helpful non-secret error to the client to aid debugging
+    // (err.message is safe; it doesn't include the SMTP password)
     return res.status(500).json({
       success: false,
-      message: "Failed to send OTP",
-    });
-  }
-});
-
-app.post("/verify-otp", requireApiKey, (req, res) => {
-  const { uid, code } = req.body;
-
-  if (!uid || !code)
-    return res
-      .status(400)
-      .json({ success: false, message: "uid and code required" });
-
-  const valid = verifyOTP(uid, code);
-  return res.json({
-    success: valid,
-    message: valid ? "OTP verified" : "Invalid or expired OTP",
-  });
-});
-
-// --- Start server -------------------------------------------------
-app.listen(PORT, () =>
-  console.log(`🚀 Gmail OTP Server running on port ${PORT}`)
-);
+      message: 'Failed to send
